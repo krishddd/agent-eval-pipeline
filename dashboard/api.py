@@ -27,6 +27,10 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
+from evals._env import load_env
+
+load_env()  # load .env (OPENAI_API_KEY, judge config) before anything reads it
+
 from dashboard.log_stream import (
     router as logs_router,
     install as install_log_stream,
@@ -250,6 +254,7 @@ class RegisterRequest(BaseModel):
     tools_manifest: List[Dict[str, Any]] = Field(default_factory=list)
     subagents: List[str] = Field(default_factory=list)
     pass_k: int = 8
+    reliability_k: int = 1
     max_cost_usd: float = 5.0
     sla_latency_ms: int = 30000
     golden_trajectory: Optional[List[str]] = None
@@ -321,6 +326,7 @@ async def register_agent(req: RegisterRequest):
         tools_manifest=tools,
         subagents=req.subagents,
         pass_k=req.pass_k,
+        reliability_k=req.reliability_k,
         max_cost_usd=req.max_cost_usd,
         sla_latency_ms=req.sla_latency_ms,
         golden_trajectory=req.golden_trajectory,
@@ -587,8 +593,7 @@ async def run_eval(req: EvalRequest, background_tasks: BackgroundTasks):
             try:
                 import webbrowser
                 viewer_url = (
-                    f"http://localhost:8000/logs/viewer"
-                    f"?eval_port=8000&agent_port=8080"
+                    f"http://localhost:8000/logs/viewer?eval_port=8000"
                 )
                 print(f"[EvalRun] 🌐 Opening live-log viewer: {viewer_url}")
                 webbrowser.open(viewer_url, new=2)
@@ -702,7 +707,7 @@ async def run_eval(req: EvalRequest, background_tasks: BackgroundTasks):
 
     background_tasks.add_task(_run)
 
-    viewer_url = "http://localhost:8000/logs/viewer?eval_port=8000&agent_port=8080"
+    viewer_url = "http://localhost:8000/logs/viewer?eval_port=8000"
     return {
         "status_code": 202,
         "success": True,

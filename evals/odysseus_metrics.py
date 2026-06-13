@@ -108,7 +108,10 @@ def _extract_domain(url: str) -> str:
     from urllib.parse import urlparse
     try:
         parsed = urlparse(url if "://" in url else "http://" + url)
-        return (parsed.netloc or "").lower().lstrip("www.")
+        netloc = (parsed.netloc or "").lower().split(":")[0]  # drop port
+        # strip a leading "www." PREFIX (not lstrip — that eats char sets, e.g.
+        # "wikipedia.org" -> "ikipedia.org")
+        return netloc[4:] if netloc.startswith("www.") else netloc
     except Exception:
         return ""
 
@@ -180,30 +183,77 @@ def m02_step_success_ratio(runs: List[Dict]) -> Dict:
     return {"m02_step_success_ratio": _rate(ok, len(runs)), "m02_successful_runs": ok}
 
 
-def m03_calibration_gap(runs: List[Dict]) -> Dict:
-    """M03 — Gap between stated confidence and observed success."""
-    gaps = []
+# Minimum (confidence, outcome) pairs before the formal ECE/Brier estimators
+# are statistically meaningful (binned calibration needs samples).
+_MIN_CALIB_PAIRS = 8
+
+
+def _ece_brier(pairs: List[Tuple[float, float]], n_bins: int = 10) -> Tuple[float, float]:
+    """Expected Calibration Error (binned) and Brier score for (conf, correct) pairs."""
+    brier = statistics.mean((c - y) ** 2 for c, y in pairs)
+    total = len(pairs)
+    ece = 0.0
+    for b in range(n_bins):
+        lo, hi = b / n_bins, (b + 1) / n_bins
+        bucket = [(c, y) for c, y in pairs if (lo < c <= hi) or (b == 0 and c == 0)]
+        if not bucket:
+            continue
+        avg_conf = statistics.mean(c for c, _ in bucket)
+        acc = statistics.mean(y for _, y in bucket)
+        ece += (len(bucket) / total) * abs(avg_conf - acc)
+    return round(ece, 4), round(brier, 4)
+
+
+def m03_verbal_confidence_gap(runs: List[Dict]) -> Dict:
+    """M03 — Verbal-confidence calibration.
+
+    Parses any stated confidence ("85% confident") and compares it to observed
+    success. The PRIMARY scalar is the mean absolute verbal-confidence gap
+    (honest name — this is NOT formal ECE at low sample counts). When enough
+    (confidence, outcome) pairs are pooled (>= _MIN_CALIB_PAIRS) we ALSO report
+    the community-standard Expected Calibration Error (binned) and Brier score.
+    """
+    pairs: List[Tuple[float, float]] = []
     for r in runs:
         m = re.search(r'(\d{1,3})\s*%\s*(?:confiden|sure|certain)|confiden\w*[:\s]+(\d{1,3})\s*%',
                       (r.get("final_output") or ""), re.I)
         if not m:
             continue
-        stated = int(m.group(1) or m.group(2)) / 100.0
+        stated = min(1.0, int(m.group(1) or m.group(2)) / 100.0)
         actual = 1.0 if r.get("success") else 0.0
-        gaps.append(abs(stated - actual))
-    return {"m03_calibration_gap": _avg(gaps), "m03_confidence_statements": len(gaps)}
+        pairs.append((stated, actual))
+
+    out: Dict[str, Any] = {
+        "m03_verbal_confidence_gap": round(statistics.mean(abs(c - y) for c, y in pairs), 4) if pairs else None,
+        "m03_confidence_statements": len(pairs),
+        "m03_ece": None,
+        "m03_brier": None,
+    }
+    if len(pairs) >= _MIN_CALIB_PAIRS:
+        out["m03_ece"], out["m03_brier"] = _ece_brier(pairs)
+    return out
 
 
 def m04_autonomy_efficiency(runs: List[Dict]) -> Dict:
-    """M04 — Step economy: budgeted steps vs steps actually taken."""
+    """M04 — Step economy vs an OPTIMAL reference trajectory.
+
+    Optimal step count comes from (in priority order): golden_milestones length
+    (the reference trajectory), else expected_tools length, else max_steps.
+    score = min(1, optimal/actual_tool_calls). This is reference-baselined, not
+    judged — efficiency is a ratio against a known-good path (trajectory-based
+    agent eval), so an LLM judge would add noise, not rigor.
+    """
     scores = []
     for r in runs:
-        budget = (r.get("task_meta") or {}).get("max_steps")
-        if not budget:
+        meta = r.get("task_meta") or {}
+        optimal = (len(meta.get("golden_milestones") or [])
+                   or len(meta.get("expected_tools") or [])
+                   or meta.get("max_steps") or 0)
+        if not optimal:
             continue
         actual = max(1, len(r.get("tool_calls") or []))
-        scores.append(min(1.0, budget / actual))
-    return {"m04_autonomy_efficiency": _avg(scores)}
+        scores.append(min(1.0, optimal / actual))
+    return {"m04_autonomy_efficiency": _avg(scores), "m04_runs_scored": len(scores)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -251,21 +301,54 @@ def m06_tool_selection_accuracy(runs: List[Dict]) -> Dict:
     return {"m06_tool_selection_accuracy": _rate(expected_hits, used), "m06_calls_judged": used}
 
 
+def _value_match(provided, expected) -> bool:
+    """BFCL-style loose value equality (case-insensitive, substring-tolerant)."""
+    ps, es = str(provided).strip().lower(), str(expected).strip().lower()
+    return ps == es or (len(es) >= 3 and es in ps) or (len(ps) >= 3 and ps in es)
+
+
 def m07_parameter_f1(runs: List[Dict]) -> Dict:
-    """M07 — Mean F1 of provided vs required parameters per tool call."""
-    f1s = []
-    for c in _all_calls(runs):
-        schema = TOOL_PARAM_SCHEMAS.get(c.get("name"))
-        if not schema:
-            continue
-        provided = {k for k, v in (c.get("parameters") or {}).items()
-                    if v not in (None, "", [], {})}
-        correct = schema & provided
-        precision = len(correct) / len(provided) if provided else 0.0
-        recall = len(correct) / len(schema) if schema else 0.0
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-        f1s.append(f1)
-    return {"m07_parameter_f1_score": _avg(f1s), "m07_calls_with_schema": len(f1s)}
+    """M07 — Parameter F1 per tool call.
+
+    Two grading modes:
+      • VALUE-level (BFCL-style, arXiv:2402.04253): when the task supplies
+        ground-truth argument values via task_meta["expected_args"][tool],
+        F1 is computed over (key, value) correctness — the rigorous check.
+      • KEY-level fallback: when no ground truth, F1 of provided-vs-required
+        parameter KEYS against the tool schema (presence only).
+    """
+    f1s, value_graded = [], 0
+    for r in runs:
+        exp_args = (r.get("task_meta") or {}).get("expected_args") or {}
+        for c in r.get("tool_calls", []):
+            name = c.get("name")
+            params = {k: v for k, v in (c.get("parameters") or {}).items()
+                      if v not in (None, "", [], {})}
+
+            if name in exp_args and isinstance(exp_args[name], dict):
+                # Value-level grading against ground truth
+                expected = exp_args[name]
+                correct = sum(1 for k, ev in expected.items()
+                              if k in params and _value_match(params[k], ev))
+                precision = correct / len(params) if params else 0.0
+                recall = correct / len(expected) if expected else 0.0
+                value_graded += 1
+            else:
+                schema = TOOL_PARAM_SCHEMAS.get(name)
+                if not schema:
+                    continue
+                provided = set(params.keys())
+                correct = len(schema & provided)
+                precision = correct / len(provided) if provided else 0.0
+                recall = correct / len(schema) if schema else 0.0
+
+            f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+            f1s.append(f1)
+    return {
+        "m07_parameter_f1_score": _avg(f1s),
+        "m07_calls_scored": len(f1s),
+        "m07_value_level_calls": value_graded,
+    }
 
 
 def m08_tool_hallucination(runs: List[Dict]) -> Dict:
@@ -319,15 +402,23 @@ def m11_script_correctness(runs: List[Dict]) -> Dict:
 
 
 def m12_command_efficiency(runs: List[Dict]) -> Dict:
-    """M12 — Shell calls per run vs a reasonable budget."""
+    """M12 — Shell-command economy vs the EXPECTED shell-call count.
+
+    Optimal = number of shell-category tools the task expects (reference
+    baseline), else 1. score = min(1, optimal/actual_shell_calls). Reference-
+    baselined for the same reason as M04.
+    """
     scores = []
     for r in runs:
         shell = [c for c in r.get("tool_calls", []) if c.get("category") == "shell"]
         if not shell:
             continue
-        budget = (r.get("task_meta") or {}).get("max_steps") or 8
-        scores.append(min(1.0, budget / len(shell)))
-    return {"m12_command_efficiency": _avg(scores)}
+        meta = r.get("task_meta") or {}
+        exp_shell = sum(1 for t in (meta.get("expected_tools") or [])
+                        if TOOL_CATEGORIES.get(t) == "shell")
+        optimal = exp_shell or 1
+        scores.append(min(1.0, optimal / len(shell)))
+    return {"m12_command_efficiency": _avg(scores), "m12_runs_scored": len(scores)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -369,7 +460,12 @@ def m14_artifact_correctness(runs: List[Dict]) -> Dict:
 
 
 def m15_workspace_footprint(runs: List[Dict]) -> Dict:
-    """M15 — Writes made vs writes needed (penalises bloat)."""
+    """M15 — Writes made vs writes NEEDED (deterministic, reference-baselined).
+
+    Optimal = number of expected_artifacts; score = min(1, expected/writes) so
+    extra/bloat writes are penalised. Objective ratio against a real reference —
+    not an LLM-judge candidate.
+    """
     scores = []
     for r in runs:
         expected = (r.get("task_meta") or {}).get("expected_artifacts") or []
@@ -381,7 +477,7 @@ def m15_workspace_footprint(runs: List[Dict]) -> Dict:
 
 
 def m16_redundant_write_rate(runs: List[Dict]) -> Dict:
-    """M16 — Duplicate writes to the same path."""
+    """M16 — Duplicate writes to the same path (deterministic, objective count)."""
     total, dupes = 0, 0
     for r in runs:
         paths = _write_paths(r)
@@ -705,29 +801,46 @@ def m32_anomaly_detection(runs: List[Dict], monitor: Optional[EWMAMonitor] = Non
 
 
 def m33_run_consistency(runs: List[Dict]) -> Dict:
-    """M33 — Determinism across repeated runs of the SAME task (needs k>=2)."""
+    """M33 — Reliability across repeated runs of the SAME task (needs k>=2).
+
+    PRIMARY scalar = pass^k (τ-bench, arXiv:2406.12045): fraction of tasks for
+    which ALL k attempts succeeded — the community-standard reliability metric.
+    Also reports empirical pass@k (any of k succeeded) and a stability proxy
+    (1 - coefficient-of-variation of output length / tool count).  All None when
+    every task ran only once (k=1), which is honest, not a failure.
+    """
     by_task: Dict[str, List[Dict]] = {}
     for r in runs:
         by_task.setdefault(r.get("task", ""), []).append(r)
 
-    scores = []
+    pass_hat, pass_at, stability, k_per_task = [], [], [], {}
     for task, group in by_task.items():
         if len(group) < 2:
             continue
-        success = [1.0 if g.get("success") else 0.0 for g in group]
-        lengths = [len(g.get("final_output") or "") for g in group]
-        counts = [len(g.get("tool_calls") or []) for g in group]
-        sub = []
-        # success agreement = 1 - stdev (binary → 0..0.5 range, scale to 0..1)
-        sub.append(1.0 - min(1.0, statistics.pstdev(success) * 2))
-        for series in (lengths, counts):
+        k_per_task[task] = len(group)
+        succ = [bool(g.get("success")) for g in group]
+        pass_hat.append(1.0 if all(succ) else 0.0)
+        pass_at.append(1.0 if any(succ) else 0.0)
+        for series in ([len(g.get("final_output") or "") for g in group],
+                       [len(g.get("tool_calls") or []) for g in group]):
             mean = statistics.mean(series) if series else 0
             if mean > 0:
-                cv = statistics.pstdev(series) / mean
-                sub.append(max(0.0, 1.0 - cv))
-        scores.append(statistics.mean(sub) if sub else None)
-    return {"m33_run_consistency_score": _avg(scores),
-            "m33_tasks_with_repeats": sum(1 for g in by_task.values() if len(g) >= 2)}
+                stability.append(max(0.0, 1.0 - statistics.pstdev(series) / mean))
+
+    if not pass_hat:
+        return {"m33_run_consistency_score": None, "m33_pass_hat_k": None,
+                "m33_pass_at_k": None, "m33_stability_proxy": None,
+                "m33_tasks_with_repeats": 0}
+    return {
+        # Primary scalar IS pass^k so the scorecard/threshold reflect the
+        # validated reliability metric.
+        "m33_run_consistency_score": round(statistics.mean(pass_hat), 4),
+        "m33_pass_hat_k": round(statistics.mean(pass_hat), 4),
+        "m33_pass_at_k": round(statistics.mean(pass_at), 4),
+        "m33_stability_proxy": _avg(stability),
+        "m33_tasks_with_repeats": len(pass_hat),
+        "m33_k_per_task": k_per_task,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -735,7 +848,7 @@ def m33_run_consistency(runs: List[Dict]) -> Dict:
 # ═══════════════════════════════════════════════════════════════════════════
 
 _METRIC_FUNCS = [
-    m01_goal_completion, m02_step_success_ratio, m03_calibration_gap, m04_autonomy_efficiency,
+    m01_goal_completion, m02_step_success_ratio, m03_verbal_confidence_gap, m04_autonomy_efficiency,
     m05_tool_exec_success, m06_tool_selection_accuracy, m07_parameter_f1, m08_tool_hallucination,
     m09_shell_success, m10_command_recovery, m11_script_correctness, m12_command_efficiency,
     m13_file_op_success, m14_artifact_correctness, m15_workspace_footprint, m16_redundant_write_rate,

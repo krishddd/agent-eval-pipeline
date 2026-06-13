@@ -94,6 +94,10 @@ class AgentCard(BaseModel):
     eval_categories: Optional[List[str]] = None
     max_cost_usd: float = Field(default=5.0, ge=0)
     pass_k: int = Field(default=8, ge=1, le=50)
+    # Reliability sampling for REMOTE agents: how many times to repeat a task
+    # that is marked idempotent (chat / read-only) so pass@k & pass^k (τ-bench)
+    # become computable. Side-effecting tasks always run once. 1 = disabled.
+    reliability_k: int = Field(default=1, ge=1, le=20)
     golden_trajectory: Optional[List[str]] = None
     golden_milestones: Optional[List[str]] = None
     golden_sources: Optional[List[str]] = None  # For provenance comparator (silent failure detection)

@@ -391,31 +391,33 @@ body{font-family:sans-serif;margin:0;padding:10px;background:#1e1e1e;color:#ddd}
 <body>
 <div class="bar">
   <strong>Live Logs</strong>
-  <span class="chip" id="s8000">eval :8000 — connecting…</span>
-  <span class="chip" id="s8080">agent :8080 — connecting…</span>
+  <span class="chip" id="s8000">eval — connecting…</span>
+  <span class="chip" id="s_agent" style="display:none">agent — connecting…</span>
   <span class="chip" id="filter">filter: ALL</span>
-  <button onclick="document.getElementById('l8000').innerHTML='';document.getElementById('l8080').innerHTML=''">Clear</button>
+  <button onclick="document.getElementById('l8000').innerHTML='';var a=document.getElementById('l_agent');if(a)a.innerHTML=''">Clear</button>
 </div>
 <div class="row">
-  <div class="panel"><h3>Eval Pipeline (port 8000)</h3><div class="body" id="l8000"></div></div>
-  <div class="panel"><h3>Agent Orchestrator (port 8080)</h3><div class="body" id="l8080"></div></div>
+  <div class="panel"><h3>Eval Pipeline</h3><div class="body" id="l8000"></div></div>
+  <div class="panel" id="p_agent" style="display:none"><h3 id="h_agent">Agent</h3><div class="body" id="l_agent"></div></div>
 </div>
 <script>
 const qs = new URLSearchParams(location.search);
 const jobId = qs.get('job_id');
 const evalPort = qs.get('eval_port') || '8000';
-const agentPort = qs.get('agent_port') || '8080';
+// Second channel is OPT-IN: only shown when ?agent_port=... is supplied.
+// (Odysseus has no log-stream agent, so the default viewer is single-channel.)
+const agentPort = qs.get('agent_port');
 if (jobId) document.getElementById('filter').textContent = 'filter: ' + jobId;
 
-function connect(port, panelId, chipId) {
+function connect(port, panelId, chipId, label) {
   const box  = document.getElementById(panelId);
   const chip = document.getElementById(chipId);
   const params = new URLSearchParams({ replay: '1' });
   if (jobId) params.set('job_id', jobId);
   const es = new EventSource(`http://${location.hostname}:${port}/logs/stream?` + params);
   let count = 0;
-  es.onopen    = () => { chip.textContent = `${chipId === 's8000' ? 'eval :8000' : 'agent :8080'} — connected`; chip.className = 'chip ok'; };
-  es.onerror   = () => { chip.textContent = `${chipId === 's8000' ? 'eval :8000' : 'agent :8080'} — reconnecting…`; chip.className = 'chip err'; };
+  es.onopen    = () => { chip.textContent = `${label} — connected`; chip.className = 'chip ok'; };
+  es.onerror   = () => { chip.textContent = `${label} — reconnecting…`; chip.className = 'chip err'; };
   es.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     const t = (ev.ts || '').slice(11, 19);
@@ -424,11 +426,16 @@ function connect(port, panelId, chipId) {
     d.textContent = `[${t}] ${(ev.level || '').padEnd(5)} ${ev.msg}`;
     box.appendChild(d);
     box.scrollTop = box.scrollHeight;
-    chip.textContent = `${chipId === 's8000' ? 'eval :8000' : 'agent :8080'} — ${++count} events`;
+    chip.textContent = `${label} — ${++count} events`;
   };
 }
-connect(evalPort,  'l8000', 's8000');
-connect(agentPort, 'l8080', 's8080');
+connect(evalPort, 'l8000', 's8000', `eval :${evalPort}`);
+if (agentPort) {
+  document.getElementById('s_agent').style.display = '';
+  document.getElementById('p_agent').style.display = '';
+  document.getElementById('h_agent').textContent = `Agent (port ${agentPort})`;
+  connect(agentPort, 'l_agent', 's_agent', `agent :${agentPort}`);
+}
 </script>
 </body></html>"""
 

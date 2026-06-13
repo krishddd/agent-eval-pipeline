@@ -33,6 +33,10 @@ except Exception:
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from evals._env import load_env
+
+load_env()  # pick up ODYSSEUS_TOKEN / OPENAI_API_KEY from .env
+
 # Odysseus tool surface (mirrors security_module/sample_configs/odysseus_agent.json)
 TOOLS_MANIFEST = [
     {"name": "shell_exec", "description": "Execute a shell command", "parameters": {"cmd": "str"}},
@@ -56,10 +60,11 @@ def build_request(base_url: str, token: str, mode: str) -> dict:
         "name": "odysseus-local",
         "agent_type": "react",
         "framework": "odysseus",
-        "model_backbone": "odysseus-default",
+        "model_backbone": "mistral",
         "memory_type": "none",
         "tools_manifest": TOOLS_MANIFEST,
         "pass_k": 1,
+        "reliability_k": 3,
         "max_cost_usd": 1.0,
         "sla_latency_ms": 120000,
         "tags": {"env": "local", "target": "odysseus", "port": "7000"},
@@ -134,7 +139,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Register Odysseus with the eval pipeline")
     ap.add_argument("--base-url", default="http://127.0.0.1:7000")
     ap.add_argument("--dashboard", default="http://localhost:8000")
-    ap.add_argument("--mode", default="auto", choices=["auto", "agent", "chat"])
+    # This Odysseus build has no one-shot agent endpoint (/api/agent/run 404s);
+    # tool execution is via the async task lifecycle. Chat is the working surface.
+    ap.add_argument("--mode", default="chat", choices=["auto", "agent", "chat"])
     ap.add_argument("--token", default=os.getenv("ODYSSEUS_TOKEN", ""))
     ap.add_argument("--local", action="store_true", help="register into in-memory registry instead of the dashboard")
     args = ap.parse_args()

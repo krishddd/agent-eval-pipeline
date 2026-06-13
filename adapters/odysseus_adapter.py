@@ -64,35 +64,37 @@ class OdysseusAdapter(RemoteAgentAdapter):
         self.mode = (remote_config.get("mode") or "auto").lower()
         self.model = remote_config.get("model")
         self.session = remote_config.get("session")
+        self._agent_unavailable = False  # set once an agent endpoint 404/405s
 
     # ── Mode + payload ───────────────────────────────────────────────────
-    def _resolve(self, task: str) -> Tuple[str, str, Dict[str, Any]]:
-        """Return (mode, endpoint, payload) for a task, honouring directives."""
+    def _resolve_mode(self, task: str) -> Tuple[str, str]:
+        """Return (mode, clean_task), honouring AGENT:/CHAT: directives."""
         stripped = task.lstrip()
         upper = stripped[:7].upper()
-        mode = self.mode
         if upper.startswith("AGENT:"):
-            mode, task = "agent", stripped[6:].lstrip()
-        elif upper.startswith("CHAT:"):
-            mode, task = "chat", stripped[5:].lstrip()
-        elif mode == "auto":
-            mode = "agent" if self.agent_endpoint else "chat"
+            return "agent", stripped[6:].lstrip()
+        if upper.startswith("CHAT:"):
+            return "chat", stripped[5:].lstrip()
+        if self.mode == "auto":
+            return ("agent" if self.agent_endpoint else "chat"), task
+        return self.mode, task
 
-        if mode == "agent":
-            payload = {self.agent_task_field: task}
-            payload.update(self.extra_body)
-            return "agent", self.agent_endpoint, payload
-
+    def _chat_payload(self, task: str) -> Dict[str, Any]:
         payload = {self.task_field: task}
         if self.model:
             payload["model"] = self.model
         if self.session:
             payload["session"] = self.session
         payload.update(self.extra_body)
-        return "chat", self.chat_endpoint, payload
+        return payload
 
-    # ── HTTP with retry ──────────────────────────────────────────────────
-    def _post(self, endpoint: str, payload: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
+    def _agent_payload(self, task: str) -> Dict[str, Any]:
+        payload = {self.agent_task_field: task}
+        payload.update(self.extra_body)
+        return payload
+
+    # ── HTTP with retry (only 5xx/network are retried; 4xx is terminal) ──
+    def _post(self, endpoint: str, payload: Dict[str, Any]) -> Tuple[bool, Any, Optional[str], Optional[int]]:
         url = f"{self.base_url}{endpoint}"
         headers = self._build_headers()
         last_error = None
@@ -102,23 +104,25 @@ class OdysseusAdapter(RemoteAgentAdapter):
                     resp = client.post(url, json=payload, headers=headers)
                 if resp.status_code >= 400:
                     last_error = f"HTTP {resp.status_code}: {resp.text[:400]}"
-                    print(f"[Odysseus] {last_error}")
-                    if attempt < self.max_retries:
-                        time.sleep(min(2 ** attempt, 8))
-                        continue
-                    return False, None, last_error
+                    # 4xx is a client error (missing endpoint / bad body) — do NOT
+                    # retry; retrying just spams the server. Only retry 5xx.
+                    if resp.status_code < 500 or attempt >= self.max_retries:
+                        print(f"[Odysseus] {last_error}")
+                        return False, None, last_error, resp.status_code
+                    time.sleep(min(2 ** attempt, 8))
+                    continue
                 try:
-                    return True, resp.json(), None
+                    return True, resp.json(), None, resp.status_code
                 except Exception:
-                    return True, resp.text, None
+                    return True, resp.text, None, resp.status_code
             except httpx.ConnectError as e:
-                return False, None, f"Connection error: {e}"
+                return False, None, f"Connection error: {e}", None
             except Exception as e:
                 last_error = f"{type(e).__name__}: {e}"
                 if attempt < self.max_retries:
                     time.sleep(min(2 ** attempt, 8))
                     continue
-        return False, None, last_error
+        return False, None, last_error, None
 
     # ── Trace extraction (defensive) ─────────────────────────────────────
     @staticmethod
@@ -190,11 +194,25 @@ class OdysseusAdapter(RemoteAgentAdapter):
         on_agent_msg: Optional[Callable] = None,
         on_retrieval: Optional[Callable] = None,
     ) -> AgentResult:
-        mode, endpoint, payload = self._resolve(task)
+        mode, clean = self._resolve_mode(task)
+        if mode == "agent" and self._agent_unavailable:
+            mode = "chat"  # sticky fallback after a prior 404/405
+        endpoint = self.agent_endpoint if mode == "agent" else self.chat_endpoint
+        payload = self._agent_payload(clean) if mode == "agent" else self._chat_payload(clean)
         print(f"[Odysseus] mode={mode} POST {self.base_url}{endpoint}")
 
         t0 = time.time()
-        ok, data, err = self._post(endpoint, payload)
+        ok, data, err, status = self._post(endpoint, payload)
+
+        # Agent surface absent on this build (404/405) → fall back to chat,
+        # once and stickily, so we don't spam the missing endpoint.
+        if not ok and mode == "agent" and status in (404, 405):
+            self._agent_unavailable = True
+            print(f"[Odysseus] agent endpoint {endpoint} unavailable ({status}); "
+                  f"falling back to chat ({self.chat_endpoint}) for this and future calls")
+            mode, endpoint = "chat", self.chat_endpoint
+            ok, data, err, status = self._post(endpoint, self._chat_payload(clean))
+
         latency_ms = (time.time() - t0) * 1000
 
         if not ok or data is None:

@@ -135,7 +135,7 @@ EWMA_ANOMALY_SIGMA = 2.0
 METRIC_THRESHOLDS = {
     "m01_goal_completion_rate":      {"warn": 0.80, "fail": 0.50, "op": "<"},
     "m02_step_success_ratio":        {"warn": 0.85, "fail": 0.60, "op": "<"},
-    "m03_calibration_gap":           {"warn": 0.20, "fail": 0.40, "op": ">"},
+    "m03_verbal_confidence_gap":     {"warn": 0.20, "fail": 0.40, "op": ">"},
     "m05_tool_exec_success_rate":    {"warn": 0.90, "fail": 0.70, "op": "<"},
     "m06_tool_selection_accuracy":   {"warn": 0.85, "fail": 0.60, "op": "<"},
     "m07_parameter_f1_score":        {"warn": 0.80, "fail": 0.50, "op": "<"},

@@ -14,6 +14,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
+from evals._env import load_env
+
+load_env()  # make OPENAI_API_KEY / judge config available wherever the judge runs
+
 
 # ── Eval Result ──────────────────────────────────────────────────────────
 
@@ -171,6 +175,46 @@ class LLMJudge:
                 continue
         return None
 
+    async def complete(self, system: str, user: str) -> Optional[str]:
+        """
+        Raw free-text completion via the detected backend (OpenAI → Ollama).
+
+        Returns None when no backend is available, so callers can fall back to
+        an offline heuristic.  Used by the RAGAS-style grounding/faithfulness
+        judge (claim extraction + NLI verification).
+        """
+        if LLMJudge._backend is None:
+            LLMJudge._backend = await self._detect_backend()
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        if LLMJudge._backend == "openai":
+            try:
+                import openai
+                if self._client is None:
+                    self._client = openai.AsyncOpenAI()
+                resp = await self._client.chat.completions.create(
+                    model=self.model, temperature=self.temperature, messages=messages,
+                )
+                return (resp.choices[0].message.content or "").strip()
+            except Exception:
+                LLMJudge._backend = "ollama"  # fall through
+        if LLMJudge._backend == "ollama":
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        f"{self.OLLAMA_BASE_URL}/api/chat",
+                        json={"model": self.OLLAMA_MODEL, "messages": messages,
+                              "stream": False, "options": {"temperature": self.temperature}},
+                    )
+                    if resp.status_code == 200:
+                        return (resp.json().get("message", {}).get("content", "") or "").strip()
+            except Exception:
+                return None
+        return None
+
     async def _single_judgment(
         self,
         prompt: str,
@@ -284,8 +328,16 @@ class LLMJudge:
     @staticmethod
     def _compute_cohen_kappa(scores: List[float], scale: Tuple[int, int]) -> float:
         """
-        Compute free-marginal multi-rater agreement (Randolph's kappa variant).
-        Single subject (one piece of content), N raters.
+        Compute Randolph's free-marginal multi-rater kappa for one subject
+        (one piece of content) rated by N judges.
+
+        NOTE on naming: this is NOT Cohen's κ. Cohen's κ is defined only for
+        EXACTLY TWO raters. For N>2 raters the correct coefficients are Fleiss' κ
+        (nominal) or Krippendorff's α (any measurement level). We use Randolph's
+        free-marginal variant here because the judge scale is small-ordinal and
+        marginals are not fixed in advance. The method name is retained for
+        backward compatibility; treat the returned value as a multi-rater
+        agreement coefficient.
 
         Discretises continuous scores to integer bins on the scale,
         then computes observed vs chance agreement.

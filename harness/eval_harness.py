@@ -124,7 +124,7 @@ class ThresholdGate:
         },
         "odysseus_metrics": {
             "m01_goal_completion_rate": (">=", 0.80),
-            "m03_calibration_gap": ("<=", 0.20),
+            "m03_verbal_confidence_gap": ("<=", 0.20),
             "m06_tool_selection_accuracy": (">=", 0.85),
             "m07_parameter_f1_score": (">=", 0.80),
             "m09_shell_success_rate": (">=", 0.85),
@@ -207,6 +207,24 @@ class EvalHarness:
     """
 
     @staticmethod
+    def _load_task_meta() -> Dict[str, Dict]:
+        """Load the suite's task_meta map (task string → expectations/idempotency).
+
+        Mirrors OdysseusMetricsEvaluator's loader so the harness can size k per
+        task. Empty for non-Odysseus runs → all tasks keep k=1/pass_k.
+        """
+        import json
+        import os
+        path = os.getenv("ODYSSEUS_TASK_SUITE") or os.path.join(
+            os.path.dirname(__file__), "..", "tasks", "odysseus_suite.json"
+        )
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f).get("task_meta", {}) or {}
+        except Exception:
+            return {}
+
+    @staticmethod
     def _create_evaluators():
         """Create fresh evaluator instances per-run to avoid shared state."""
         return {
@@ -278,22 +296,36 @@ class EvalHarness:
         wrapper = TracingWrapper(adapter, card)
 
         # ── Execute k runs per task ──────────────────────────────
-        # For remote agents: k=1 (single run). The agent's full pipeline
-        # already ran (~27 min). We extract all metrics from the ONE
-        # enriched PipelineResult — tool_calls, agent_messages, tokens,
-        # chunks, milestones — without re-triggering.
+        # Remote agents default to k=1 to avoid repeating real side effects
+        # (shell/file writes).  EXCEPTION — reliability mode: a task marked
+        # `idempotent` in the suite's task_meta (chat / read-only) is repeated
+        # `card.reliability_k` times so pass@k and pass^k (τ-bench) become
+        # computable.  Native (in-process) agents use card.pass_k as before.
         from adapters.remote_adapter import RemoteAgentAdapter
-        effective_k = 1 if isinstance(adapter, RemoteAgentAdapter) else card.pass_k
-        if effective_k != card.pass_k:
-            print(f"[EvalHarness] Remote agent detected — using k=1 (was {card.pass_k})")
+        is_remote = isinstance(adapter, RemoteAgentAdapter)
+        task_meta = self._load_task_meta()
+        rel_k = getattr(card, "reliability_k", 1) or 1
+
+        def _k_for(task: str) -> int:
+            if not is_remote:
+                return card.pass_k
+            meta = task_meta.get(task, {})
+            if meta.get("idempotent") and rel_k > 1:
+                return rel_k
+            return 1
+
+        if is_remote:
+            print(f"[EvalHarness] Remote agent — k=1 by default; "
+                  f"reliability_k={rel_k} on idempotent tasks")
 
         all_runs: Dict[str, list] = {}
         total_runs = 0
 
         for task in task_suite:
+            k = _k_for(task)
             runs = await asyncio.gather(*[
                 self._run_single(wrapper, task)
-                for _ in range(effective_k)
+                for _ in range(k)
             ])
             all_runs[task] = list(runs)
             total_runs += len(runs)
