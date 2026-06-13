@@ -1,0 +1,44 @@
+# Universal Agent Evaluation Pipeline - Dependencies
+
+# Core
+pydantic>=2.0,<3.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+
+# Async
+asyncio-extras>=1.3
+asyncpg>=0.29.0
+
+# Tracing & Observability
+opentelemetry-api>=1.23.0
+opentelemetry-sdk>=1.23.0
+opentelemetry-exporter-otlp>=1.23.0
+
+# ML Experiment Tracking
+mlflow>=2.12.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Storage
+boto3>=1.34.0          # S3 artifact store
+psycopg2-binary>=2.9.0 # PostgreSQL fallback
+
+# LLM Providers (optional - for judge evaluations)
+openai>=1.12.0
+anthropic>=0.18.0
+
+# NLP / PII Detection
+spacy>=3.7.0
+
+# RAG Evaluation
+# ragas>=0.1.0  # uncomment when using RAG evaluator
+
+# HTTP
+httpx>=0.27.0
+requests>=2.31.0
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0
+rich>=13.0.0

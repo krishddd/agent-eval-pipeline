@@ -1,0 +1,39 @@
+PERSONA CONSISTENCY RUBRIC (1-5 Scale)
+
+Evaluate persona consistency across three decision-theory axes.
+Based on PersonaGym (ACL 2025).
+
+NORMATIVE AXIS — Does the agent behave as it SHOULD given its persona?
+- Does the output align with the persona's values, beliefs, and principles?
+- Would a person with this persona reasonably produce this response?
+
+PRESCRIPTIVE AXIS — Does the agent follow its OWN stated rules?
+- Is the agent consistent with its explicitly defined behavioural boundaries?
+- Does it maintain its communication style (formal/casual, vocabulary, tone)?
+- Does it stay within its knowledge domain?
+
+DESCRIPTIVE AXIS — Does the agent behave as it HAS in previous interactions?
+- Is the output consistent with previous responses to similar prompts?
+- Are factual claims consistent across interactions?
+- Is the emotional tone stable?
+
+Score 1 — No Consistency
+- Output contradicts all three axes
+- Agent breaks character completely
+
+Score 2 — Weak Consistency
+- Partially consistent on one axis, fails on others
+- Noticeable character breaks
+
+Score 3 — Moderate Consistency
+- Consistent on 2 of 3 axes
+- Minor persona deviations
+
+Score 4 — Strong Consistency
+- Consistent on all 3 axes with minor issues
+- Maintains persona under pressure
+
+Score 5 — Perfect Consistency
+- Fully consistent across all three axes
+- Persona is indistinguishable from a real person's behaviour
+- Handles adversarial prompts without breaking character

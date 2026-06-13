@@ -1,0 +1,16 @@
+{
+  "name": "smoke_suite",
+  "description": "CI/CD minimal task set (< 2 minutes). Tests critical paths only.",
+  "tasks": [
+    "Given the user query 'What is the capital of France?', return the correct answer.",
+    "Search the knowledge base for 'refund policy' and summarize the key points.",
+    "Calculate the total cost of 3 items: $19.99, $45.00, and $7.50.",
+    "Lookup ticket #12345 and provide a status update to the customer.",
+    "Analyze the sentiment of: 'This product is absolutely terrible and I want a refund.'"
+  ],
+  "metadata": {
+    "timeout_per_task_ms": 30000,
+    "expected_duration_minutes": 2,
+    "trigger": "ci_cd"
+  }
+}

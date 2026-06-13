@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+env/
+dist/
+build/
+
+# IDE / Claude
+.claude/
+.idea/
+.vscode/
+
+# Secrets (NEVER commit)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+client_secret*.json
+credentials.json
+token.json
+service-account*.json
+
+# Runtime artifacts (generated eval outputs — never commit)
+artifacts/
+reports/
+eval_results.json
+*.sqlite3
+*.db
+*.log
+logs/
+results/
+mlruns/
+
+# Large docs
+*.docx
+*.pdf
+
+# OS
+.DS_Store
+Thumbs.db

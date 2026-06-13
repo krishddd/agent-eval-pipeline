@@ -1,0 +1,10 @@
+{
+  "name": "regression_suite",
+  "description": "Auto-populated by drift detector. Contains tasks from failed runs promoted for regression testing.",
+  "tasks": [],
+  "promoted_from_drift": [],
+  "metadata": {
+    "auto_populated": true,
+    "last_updated": null
+  }
+}

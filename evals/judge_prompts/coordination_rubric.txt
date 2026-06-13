@@ -1,0 +1,31 @@
+COORDINATION SCORE RUBRIC (1-5 Scale)
+
+Evaluate the quality of multi-agent coordination and collaboration.
+
+Score 1 — No Coordination
+- Agents operate independently with no communication
+- Task delegation is random or absent
+- No evidence of collaborative strategy
+
+Score 2 — Minimal Coordination
+- Some communication between agents but unstructured
+- Poor task delegation — wrong agents assigned wrong tasks
+- High communication overhead with little productive outcome
+
+Score 3 — Adequate Coordination
+- Clear task delegation with mostly correct agent assignments
+- Communication is structured but sometimes redundant
+- Agents complete their subtasks but integration is weak
+
+Score 4 — Good Coordination
+- Efficient task delegation matching agent specializations
+- Concise, purposeful inter-agent communication
+- Results are well-integrated with clear handoff points
+- Each agent contributes meaningfully (no free-riders)
+
+Score 5 — Expert Coordination
+- Optimal task decomposition leveraging each agent's strengths
+- Minimal communication overhead — every message advances the goal
+- Seamless handoffs with proper context transfer
+- Parallel execution where possible
+- Collective output exceeds sum of individual contributions

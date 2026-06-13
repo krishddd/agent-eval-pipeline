@@ -1,0 +1,31 @@
+{
+    "root": ".",
+    "pythonVersion": "3.11",
+    "pythonPlatform": "Windows",
+    "include": [
+        "adapters",
+        "dashboard",
+        "evals",
+        "harness",
+        "registry",
+        "schema",
+        "storage",
+        "tracer",
+        "tasks",
+        "scripts"
+    ],
+    "extraPaths": ["."],
+    "typeCheckingMode": "basic",
+    "reportMissingImports": "warning",
+    "reportMissingTypeStubs": "none",
+    "reportGeneralTypeIssues": "warning",
+    "reportOptionalMemberAccess": "warning",
+    "reportOptionalSubscript": "warning",
+    "venvPath": "",
+    "executionEnvironments": [
+        {
+            "root": ".",
+            "extraPaths": ["."]
+        }
+    ]
+}

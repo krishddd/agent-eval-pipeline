@@ -1,0 +1,29 @@
+PLANNING SCORE RUBRIC (1-5 Scale)
+
+Evaluate the agent's execution plan and trajectory quality.
+
+Score 1 — No Planning
+- Agent acts randomly with no discernible strategy
+- Tool calls are unrelated to the task
+- No evidence of goal decomposition
+
+Score 2 — Minimal Planning
+- Agent shows some task awareness but poor sequencing
+- Many unnecessary or redundant tool calls
+- Missing critical steps in the execution path
+
+Score 3 — Adequate Planning
+- Agent decomposes the task into subtasks
+- Most tool calls are relevant but ordering is suboptimal
+- Some redundancy or missed efficiency opportunities
+
+Score 4 — Good Planning
+- Clear goal decomposition with logical sequencing
+- Efficient tool usage with minimal redundancy
+- Handles edge cases and validates intermediate results
+
+Score 5 — Expert Planning
+- Optimal task decomposition and sequencing
+- Every tool call is necessary and correctly parameterized
+- Proactive error handling and validation at each step
+- Efficient use of available tools with no wasted calls

@@ -1,0 +1,149 @@
+# .github/workflows/agent-eval.yml
+# Universal Agent Evaluation Pipeline — CI/CD Gate
+# Based on CLEAR (2025) & MultiAgentBench (ACL 2025)
+
+name: Agent Eval Pipeline
+
+on:
+  pull_request:
+    paths:
+      - "agents/**"
+      - "prompts/**"
+      - "tools/**"
+      - "src/**"
+      - "config/**"
+      - "registry/**"
+      - "adapters/**"
+      - "evals/**"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *"   # Nightly production drift check
+
+permissions:
+  contents: read    # CRITICAL: never grant write — prevents CI/CD weaponisation via prompt injection
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install pipeline
+        run: pip install -r requirements.txt
+
+      - name: Register all agents
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: python scripts/register_all_agents.py
+
+      - name: Run eval harness
+        env:
+          GIT_SHA: "${{ github.sha }}"
+          TRIGGER: "ci_cd"
+        run: |
+          python -m harness.run \
+            --task-suite tasks/smoke_suite.json \
+            --output eval_results.json \
+            --fail-on-threshold
+
+      - name: Log to MLflow
+        if: always()
+        run: python scripts/log_to_mlflow.py eval_results.json
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval_results.json
+
+      - name: Post PR scorecard
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('eval_results.json')) {
+              console.log('No eval results found');
+              return;
+            }
+            const r = JSON.parse(fs.readFileSync('eval_results.json'));
+            const rows = r.results.map(res => {
+              const icon = res.passed ? "✅" : "❌";
+              const top = Object.entries(res.metrics)
+                .filter(([,v]) => v !== null)
+                .slice(0,3)
+                .map(([k,v]) => `${k}: ${(+v).toFixed(3)}`)
+                .join(", ");
+              return `| ${icon} ${res.category} | ${top} |`;
+            }).join("\n");
+
+            const warnings = r.results
+              .flatMap(res => res.warnings || [])
+              .map(w => `> ⚠️ ${w}`)
+              .join("\n");
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                `## 🤖 Agent Eval Scorecard`,
+                ``,
+                `**Overall: ${r.overall_passed ? "✅ PASS" : "❌ FAIL"}**`,
+                `**Agent:** \`${r.agent_name}\` v${r.agent_version}`,
+                `**Duration:** ${(r.duration_ms/1000).toFixed(1)}s | **Tasks:** ${r.tasks_evaluated} | **Runs:** ${r.total_runs}`,
+                ``,
+                `| Category | Top Metrics |`,
+                `|---|---|`,
+                rows,
+                ``,
+                warnings ? `### ⚠️ Warnings\n${warnings}` : '',
+              ].filter(Boolean).join("\n")
+            });
+
+  drift-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    needs: eval
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pipeline
+        run: pip install -r requirements.txt
+
+      - name: Run drift detection
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DRIFT_WEBHOOK_URL: ${{ secrets.DRIFT_WEBHOOK_URL }}
+        run: python scripts/promote_to_regression.py
+
+      - name: Commit regression updates
+        if: success()
+        run: |
+          git config user.name "eval-bot"
+          git config user.email "eval-bot@github.com"
+          git add tasks/regression_suite.json
+          git diff --cached --quiet || git commit -m "chore: auto-promote drifting metrics to regression suite"
+          git push || echo "Nothing to push"
