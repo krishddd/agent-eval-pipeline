@@ -15,6 +15,8 @@ on:
       - "registry/**"
       - "adapters/**"
       - "evals/**"
+      - "harness/**"
+      - "tasks/**"
   push:
     branches: [main]
   schedule:
@@ -27,6 +29,8 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - uses: actions/checkout@v4
@@ -44,18 +48,16 @@ jobs:
       - name: Install pipeline
         run: pip install -r requirements.txt
 
-      - name: Register all agents
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
-          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
-          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-        run: python scripts/register_all_agents.py
-
+      # Registration and eval run in the same process via auto-register in harness/run.py.
+      # A separate register step ran in its own process and lost the in-memory registry.
       - name: Run eval harness
         env:
           GIT_SHA: "${{ github.sha }}"
           TRIGGER: "ci_cd"
+          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          DATABASE_URL:        ${{ secrets.DATABASE_URL }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
         run: |
           python -m harness.run \
             --task-suite tasks/smoke_suite.json \
@@ -72,6 +74,7 @@ jobs:
         with:
           name: eval-results
           path: eval_results.json
+          if-no-files-found: warn
 
       - name: Post PR scorecard
         if: github.event_name == 'pull_request'
@@ -84,9 +87,9 @@ jobs:
               return;
             }
             const r = JSON.parse(fs.readFileSync('eval_results.json'));
-            const rows = r.results.map(res => {
+            const rows = (r.results || []).map(res => {
               const icon = res.passed ? "✅" : "❌";
-              const top = Object.entries(res.metrics)
+              const top = Object.entries(res.metrics || {})
                 .filter(([,v]) => v !== null)
                 .slice(0,3)
                 .map(([k,v]) => `${k}: ${(+v).toFixed(3)}`)
@@ -94,7 +97,7 @@ jobs:
               return `| ${icon} ${res.category} | ${top} |`;
             }).join("\n");
 
-            const warnings = r.results
+            const warnings = (r.results || [])
               .flatMap(res => res.warnings || [])
               .map(w => `> ⚠️ ${w}`)
               .join("\n");
@@ -107,8 +110,7 @@ jobs:
                 `## 🤖 Agent Eval Scorecard`,
                 ``,
                 `**Overall: ${r.overall_passed ? "✅ PASS" : "❌ FAIL"}**`,
-                `**Agent:** \`${r.agent_name}\` v${r.agent_version}`,
-                `**Duration:** ${(r.duration_ms/1000).toFixed(1)}s | **Tasks:** ${r.tasks_evaluated} | **Runs:** ${r.total_runs}`,
+                `**Agents evaluated:** ${r.agent_count ?? 0}`,
                 ``,
                 `| Category | Top Metrics |`,
                 `|---|---|`,
@@ -122,6 +124,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
     needs: eval
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - uses: actions/checkout@v4
@@ -135,7 +139,7 @@ jobs:
 
       - name: Run drift detection
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL:      ${{ secrets.DATABASE_URL }}
           DRIFT_WEBHOOK_URL: ${{ secrets.DRIFT_WEBHOOK_URL }}
         run: python scripts/promote_to_regression.py
 

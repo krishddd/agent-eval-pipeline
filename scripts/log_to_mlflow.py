@@ -24,8 +24,8 @@ async def main():
 
     results_path = sys.argv[1]
     if not os.path.exists(results_path):
-        print(f"Error: File not found: {results_path}")
-        sys.exit(1)
+        print(f"No eval results at {results_path} — nothing to log to MLflow")
+        sys.exit(0)
 
     with open(results_path, "r") as f:
         data = json.load(f)

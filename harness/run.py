@@ -62,11 +62,15 @@ async def main():
         print("Error: No tasks in suite")
         sys.exit(1)
 
-    # Get agents to evaluate
+    # Get agents to evaluate. The registry is in-memory so a separate
+    # registration process (CI step) doesn't persist here — auto-register
+    # the example agents instead of exiting with no output file.
     agents = registry.list_all()
     if not agents:
-        print("Warning: No agents registered. Run scripts/register_all_agents.py first.")
-        sys.exit(0)
+        print("No agents in registry — auto-registering example agents for CI...")
+        from scripts.register_all_agents import register_example_agents
+        register_example_agents()
+        agents = registry.list_all()
 
     if args.agent_id:
         agents = [a for a in agents if a.agent_id == args.agent_id]
