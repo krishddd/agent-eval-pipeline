@@ -30,14 +30,34 @@ async def main():
     with open(results_path, "r") as f:
         data = json.load(f)
 
-    report = EvalReport(**data)
-    logger = MLflowLogger()
-    run_id = await logger.log(report)
+    # eval_results.json is a combined wrapper: {"overall_passed": ..., "reports": [...]}
+    # Each element in "reports" is a serialised EvalReport.  Fall back to treating
+    # the whole dict as a single report for backwards-compat (single-agent case where
+    # harness/run.py spreads **all_reports[0] into the top-level dict).
+    reports_data = data.get("reports")
+    if not reports_data:
+        # Older format or single-agent spread — try top-level dict directly.
+        reports_data = [data] if "agent_id" in data else []
 
-    if run_id:
-        print(f"✓ Logged to MLflow: run_id={run_id}")
-    else:
-        print("⚠ MLflow logging failed — check configuration")
+    if not reports_data:
+        print("No individual EvalReport entries found in results — nothing to log")
+        sys.exit(0)
+
+    logger = MLflowLogger()
+    logged = 0
+    for report_dict in reports_data:
+        try:
+            report = EvalReport(**report_dict)
+            run_id = await logger.log(report)
+            if run_id:
+                print(f"✓ Logged {report.agent_name} to MLflow: run_id={run_id}")
+                logged += 1
+            else:
+                print(f"⚠ MLflow logging skipped for {report_dict.get('agent_name', '?')} — check configuration")
+        except Exception as e:
+            print(f"⚠ Could not log report: {e}")
+
+    print(f"MLflow: {logged}/{len(reports_data)} reports logged")
 
 
 if __name__ == "__main__":
