@@ -69,6 +69,7 @@ class MultiAgentEvaluator(BaseEvaluator):
             # FIX #9: Collect all kappas, don't overwrite
             judge_kappas.append(kappa)
 
+        judge_available = bool(coord_scores)
         coordination_score = statistics.mean(coord_scores) if coord_scores else 0.0
 
         # ── Collaboration Success Rate ───────────────────────────
@@ -169,8 +170,14 @@ class MultiAgentEvaluator(BaseEvaluator):
         parallelism = statistics.mean(parallelism_scores) if parallelism_scores else 0.0
 
         # ── Pass/Fail ────────────────────────────────────────────
+        # Skip coordination gate when LLM judge is unavailable — a score of
+        # 0.0 from an empty judge run is not evidence of poor coordination.
+        if not judge_available:
+            warnings.append(
+                "Coordination score not measured — LLM judge unavailable (install openai)"
+            )
         passed = (
-            coordination_score >= 3.5
+            (coordination_score >= 3.5 if judge_available else True)
             and collab_sr >= 0.85
             and handoff_acc >= 0.85
         )

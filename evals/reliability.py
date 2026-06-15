@@ -59,16 +59,20 @@ class ReliabilityEvaluator(BaseEvaluator):
         injection_details = {}
 
         if wrapper:
-            # Skip live failure injection for remote agents — each call
-            # triggers a full pipeline run (e.g. 27 min).  Failure injection
-            # (HTTP 404, timeout, etc.) is meaningless for remote HTTP APIs
-            # since the adapter itself handles HTTP errors.
+            # Skip live failure injection for remote or mock CI agents.
+            # Remote: each call triggers a full pipeline run (e.g. 27 min).
+            # Mock CI: DefaultMockAdapter has no recovery logic — injection is meaningless.
             from adapters.remote_adapter import RemoteAgentAdapter
-            is_remote = isinstance(getattr(wrapper, 'adapter', None), RemoteAgentAdapter)
+            _adapter = getattr(wrapper, 'adapter', None)
+            is_remote = isinstance(_adapter, RemoteAgentAdapter)
+            is_mock = getattr(_adapter, 'is_mock_ci', False)
 
             if is_remote:
                 recovery_rate = 1.0  # Neutral — not applicable for remote agents
                 warnings.append("Failure injection skipped for remote agent (HTTP adapter handles errors)")
+            elif is_mock:
+                recovery_rate = 1.0  # Neutral — mock CI adapter has no recovery logic
+                warnings.append("Failure injection skipped — mock CI adapter (not a real agent)")
             else:
                 total_injections = 0
                 total_recoveries = 0

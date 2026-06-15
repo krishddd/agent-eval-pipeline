@@ -24,6 +24,8 @@ from adapters.base import AgentAdapter, AgentResult
 class DefaultMockAdapter(AgentAdapter):
     """Default mock adapter for testing — replace with actual adapter factory."""
 
+    is_mock_ci: bool = True  # signals evaluators to skip live stress-tests
+
     def run(self, task, on_tool_call=None, on_agent_msg=None, on_retrieval=None):
         return AgentResult(
             output=f"Mock response to: {task[:50]}",
